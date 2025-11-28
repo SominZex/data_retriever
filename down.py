@@ -112,7 +112,9 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         cur.execute(store_query, store_params)
         stores = [row[0] for row in cur.fetchall()]
         
+        # Close cursor before returning
         cur.close()
+        
         return brands, categories, subcategories, stores
         
     except Exception as e:
@@ -189,7 +191,9 @@ def load_unavailable_filters(start_date, end_date, brand=None, category=None, su
         unavailable_subcategories = sorted(all_subcategories - available_subcategories)
         unavailable_stores = sorted(all_stores - available_stores)
         
+        # Close cursor before returning
         cur.close()
+        
         return unavailable_brands, unavailable_categories, unavailable_subcategories, unavailable_stores
         
     except Exception as e:
