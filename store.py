@@ -18,11 +18,11 @@ st.title("📊 Store Sales Analytics Dashboard")
 def get_connection_pool():
     return pool.SimpleConnectionPool(
         1, 10,
-        host='ip_address',
-        port='port_no',
-        dbname='db_name',
-        user='user_name',
-        password='user_pw',
+        host=st.secrets["DB_HOST"],
+        port=st.secrets["DB_PORT"],
+        dbname=st.secrets["DB_NAME"],
+        user=st.secrets["DB_USER"],
+        password=st.secrets["DB_PASS"],
         connect_timeout=10
     )
 
