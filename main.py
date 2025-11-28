@@ -8,8 +8,14 @@ st.set_page_config(page_title="Unified Dashboard (Choose App)", page_icon="🧩"
 # -----------------------------
 # LOGIN SYSTEM (Secure)
 # -----------------------------
+# -----------------------------
+# MULTI-USER LOGIN SYSTEM
+# -----------------------------
 if "logged_in" not in st.session_state:
     st.session_state.logged_in = False
+
+if "username" not in st.session_state:
+    st.session_state.username = None
 
 def login_screen():
     st.title("🔐 Secure Login")
@@ -18,20 +24,22 @@ def login_screen():
     password = st.text_input("Password", type="password")
 
     if st.button("Login", type="primary"):
-        if (
-            username == st.secrets["LOGIN_USER"]
-            and password == st.secrets["LOGIN_PASS"]
-        ):
+
+        users = st.secrets["USERS"]  # dictionary of users
+
+        if username in users and password == users[username]:
             st.session_state.logged_in = True
-            st.success("Login successful! Redirecting...")
+            st.session_state.username = username
+            st.success(f"Welcome, {username}! Redirecting...")
             st.rerun()
         else:
             st.error("Invalid username or password")
 
-# If not logged in → show login screen only
+# If not logged in → show login screen
 if not st.session_state.logged_in:
     login_screen()
     st.stop()
+
 
 # -----------------------------
 # MAIN APP (after login)
