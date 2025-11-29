@@ -37,8 +37,9 @@ def load_stores():
         cur = conn.cursor()
         cur.execute('SELECT DISTINCT "storeName" FROM billing_data WHERE "storeName" IS NOT NULL ORDER BY "storeName"')
         stores = [row[0] for row in cur.fetchall()]
+        result = stores
         cur.close()
-        return stores
+        return result
     except Exception as e:
         st.error(f"Error loading stores: {str(e)}")
         return []
@@ -49,9 +50,19 @@ def load_stores():
 def fetch_sales_data(start_date, end_date, store_name=None):
     """Fetch sales data for the given date range and optional store"""
     conn_pool = get_connection_pool()
-    conn = conn_pool.getconn()
+    conn = None
     
     try:
+        conn = conn_pool.getconn()
+        
+        # Test connection before using
+        try:
+            conn.isolation_level
+        except:
+            # Connection is bad, get a new one
+            conn_pool.putconn(conn, close=True)
+            conn = conn_pool.getconn()
+        
         cur = conn.cursor()
         
         # Build query
@@ -80,20 +91,29 @@ def fetch_sales_data(start_date, end_date, store_name=None):
         cur.execute(query, params)
         columns = [desc[0] for desc in cur.description]
         rows = cur.fetchall()
+        
+        result = None
+        if rows:
+            # Convert to Polars DataFrame
+            df = pl.DataFrame(rows, schema=columns, orient="row")
+            result = df
+        
         cur.close()
+        return result
         
-        if not rows:
-            return None
-        
-        # Convert to Polars DataFrame
-        df = pl.DataFrame(rows, schema=columns, orient="row")
-        return df
-        
+    except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
+        st.error(f"Database connection error: {str(e)}")
+        # Mark connection as bad
+        if conn:
+            conn_pool.putconn(conn, close=True)
+            conn = None
+        return None
     except Exception as e:
         st.error(f"Error fetching data: {str(e)}")
         return None
     finally:
-        conn_pool.putconn(conn)
+        if conn:
+            conn_pool.putconn(conn)
 
 # Calculate metrics
 def calculate_metrics(df, start_date, end_date):
