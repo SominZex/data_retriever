@@ -112,10 +112,15 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         cur.execute(store_query, store_params)
         stores = [row[0] for row in cur.fetchall()]
         
-        # FIXED: Store results before closing cursor
-        result = (brands, categories, subcategories, stores)
+        # FIXED: Materialize all data into lists before closing cursor
+        brands_list = list(brands)
+        categories_list = list(categories)
+        subcategories_list = list(subcategories)
+        stores_list = list(stores)
+        
         cur.close()
-        return result
+        
+        return (brands_list, categories_list, subcategories_list, stores_list)
         
     except Exception as e:
         st.error(f"Filter loading error: {str(e)}")
@@ -186,15 +191,14 @@ def load_unavailable_filters(start_date, end_date, brand=None, category=None, su
         available_stores = set(row[0] for row in cur.fetchall())
         
         # Calculate unavailable items
-        unavailable_brands = sorted(all_brands - available_brands)
-        unavailable_categories = sorted(all_categories - available_categories)
-        unavailable_subcategories = sorted(all_subcategories - available_subcategories)
-        unavailable_stores = sorted(all_stores - available_stores)
+        unavailable_brands = sorted(list(all_brands - available_brands))
+        unavailable_categories = sorted(list(all_categories - available_categories))
+        unavailable_subcategories = sorted(list(all_subcategories - available_subcategories))
+        unavailable_stores = sorted(list(all_stores - available_stores))
         
-        # FIXED: Store results before closing cursor
-        result = (unavailable_brands, unavailable_categories, unavailable_subcategories, unavailable_stores)
         cur.close()
-        return result
+        
+        return (unavailable_brands, unavailable_categories, unavailable_subcategories, unavailable_stores)
         
     except Exception as e:
         st.error(f"Error loading unavailable filters: {str(e)}")
