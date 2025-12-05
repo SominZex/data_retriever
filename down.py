@@ -25,6 +25,7 @@ def get_connection_pool():
     )
 
 # Cascading filter loader with smart caching
+# Cascading filter loader with smart caching
 @st.cache_data(ttl=7200)
 def load_cascading_filters(brand=None, category=None, subcategory=None, store=None):
     """Load filters based on current selections - cascading effect"""
@@ -32,8 +33,6 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
     conn = conn_pool.getconn()
     
     try:
-        cur = conn.cursor()
-        
         # Build WHERE clause based on current selections
         where_conditions = []
         params = []
@@ -54,6 +53,7 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
         
         # Try materialized view first, fallback to main table
+        cur = conn.cursor()  # Create cursor once at the top
         try:
             table_name = "filter_lookup"
             cur.execute(f'SELECT 1 FROM {table_name} LIMIT 1')
@@ -112,8 +112,6 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         cur.execute(store_query, store_params)
         stores = [row[0] for row in cur.fetchall()]
         
-        cur.close()
-        
         # Return already-materialized lists
         return (brands, categories, subcategories, stores)
         
@@ -121,6 +119,9 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         st.error(f"Filter loading error: {str(e)}")
         return [], [], [], []
     finally:
+        # Close cursor only once at the end
+        if 'cur' in locals():
+            cur.close()
         conn_pool.putconn(conn)
 
 # Load unavailable filters - optimized like cascading filters
