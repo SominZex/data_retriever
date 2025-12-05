@@ -53,12 +53,18 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
         
         # Try materialized view first, fallback to main table
-        cur = conn.cursor()  # Create cursor once at the top
+        # Create a temporary cursor just for checking table existence
+        cur_check = conn.cursor()
         try:
             table_name = "filter_lookup"
-            cur.execute(f'SELECT 1 FROM {table_name} LIMIT 1')
+            cur_check.execute(f'SELECT 1 FROM {table_name} LIMIT 1')
         except:
             table_name = "billing_data"
+        finally:
+            cur_check.close()  # Close the check cursor
+        
+        # NOW create the main cursor for all subsequent queries
+        cur = conn.cursor()
         
         # Load each filter with current constraints
         # Brands
