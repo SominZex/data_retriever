@@ -81,7 +81,7 @@ def fetch_sales_data(start_date, end_date, store_name=None):
                 "orderDate",
                 "storeName",
                 SUM("totalProductPrice") as daily_sales,
-                COALESCE(SUM("costPrice"), 0) as daily_cost,
+                SUM("costPrice") as daily_cost,
                 COUNT(*) as transaction_count
             FROM billing_data 
             WHERE {where_clause}
@@ -126,12 +126,18 @@ def calculate_metrics(df, start_date, end_date):
     pdf = df.to_pandas()
     pdf['orderDate'] = pd.to_datetime(pdf['orderDate'])
     
+    # Handle null values in daily_cost (treat as 0)
+    pdf['daily_cost'] = pdf['daily_cost'].fillna(0)
+    
+    # Calculate profit
+    pdf['daily_profit'] = pdf['daily_sales'] - pdf['daily_cost']
+    
     # Total sales and costs
     total_sales = pdf['daily_sales'].sum()
     total_cost = pdf['daily_cost'].sum()
+    total_profit = pdf['daily_profit'].sum()
     
-    # Profit calculations
-    total_profit = total_sales - total_cost
+    # Calculate profit margin percentage
     avg_profit_margin = (total_profit / total_sales * 100) if total_sales > 0 else 0
     
     # Date range calculations
@@ -163,11 +169,11 @@ def calculate_metrics(df, start_date, end_date):
     store_breakdown = pdf.groupby('storeName').agg({
         'daily_sales': 'sum',
         'daily_cost': 'sum',
+        'daily_profit': 'sum',
         'transaction_count': 'sum'
     }).reset_index()
-    store_breakdown['profit'] = store_breakdown['daily_sales'] - store_breakdown['daily_cost']
-    store_breakdown['profit_margin'] = (store_breakdown['profit'] / store_breakdown['daily_sales'] * 100).round(2)
-    store_breakdown.columns = ['storeName', 'total_sales', 'total_cost', 'total_transactions', 'profit', 'profit_margin']
+    store_breakdown.columns = ['storeName', 'total_sales', 'total_cost', 'total_profit', 'total_transactions']
+    store_breakdown['profit_margin'] = (store_breakdown['total_profit'] / store_breakdown['total_sales'] * 100).fillna(0)
     store_breakdown = store_breakdown.sort_values('total_sales', ascending=False)
     
     return {
@@ -263,15 +269,15 @@ try:
         st.metric(
             label="Total Profit",
             value=f"₹{metrics['total_profit']:,.2f}",
-            help="Total profit (Sales - Cost)",
-            delta=f"{metrics['avg_profit_margin']:.2f}%" if metrics['avg_profit_margin'] > 0 else None
+            delta=f"{metrics['avg_profit_margin']:.2f}% margin",
+            help=f"Total profit (Sales - Cost) from {start_date} to {end_date}"
         )
     
     with col3:
         st.metric(
             label="Avg Profit Margin",
             value=f"{metrics['avg_profit_margin']:.2f}%",
-            help="Average profit margin percentage"
+            help="Average profit margin percentage across all transactions"
         )
     
     with col4:
@@ -289,7 +295,7 @@ try:
         )
     
     # Second row of metrics
-    col1, col2, col3, col4, col5 = st.columns(5)
+    col1, col2, col3, col4 = st.columns(4)
     
     with col1:
         st.metric(
@@ -313,13 +319,6 @@ try:
         )
     
     with col4:
-        st.metric(
-            label="Total Weeks",
-            value=f"{metrics['total_weeks']}",
-            help="Number of weeks in the date range"
-        )
-    
-    with col5:
         avg_transaction_value = metrics['total_sales'] / metrics['total_transactions'] if metrics['total_transactions'] > 0 else 0
         st.metric(
             label="Avg Transaction",
@@ -351,10 +350,10 @@ try:
             display_df = metrics['store_breakdown'].copy()
             display_df['total_sales'] = display_df['total_sales'].apply(lambda x: f"₹{x:,.2f}")
             display_df['total_cost'] = display_df['total_cost'].apply(lambda x: f"₹{x:,.2f}")
-            display_df['profit'] = display_df['profit'].apply(lambda x: f"₹{x:,.2f}")
+            display_df['total_profit'] = display_df['total_profit'].apply(lambda x: f"₹{x:,.2f}")
             display_df['profit_margin'] = display_df['profit_margin'].apply(lambda x: f"{x:.2f}%")
             display_df['total_transactions'] = display_df['total_transactions'].apply(lambda x: f"{int(x):,}")
-            display_df.columns = ['Store Name', 'Total Sales', 'Total Cost', 'Total Transactions', 'Profit', 'Profit Margin %']
+            display_df.columns = ['Store Name', 'Total Sales', 'Total Cost', 'Total Profit', 'Profit Margin %', 'Total Transactions']
             st.dataframe(display_df, use_container_width=True, height=400)
         
         st.divider()
@@ -468,15 +467,12 @@ try:
     
     # Raw Data Table
     with st.expander("📋 View Raw Daily Data"):
-        display_daily = metrics['daily_data'][['orderDate', 'storeName', 'daily_sales', 'daily_cost', 'transaction_count']].copy()
-        display_daily['profit'] = display_daily['daily_sales'] - display_daily['daily_cost']
-        display_daily['profit_margin'] = (display_daily['profit'] / display_daily['daily_sales'] * 100).round(2)
+        display_daily = metrics['daily_data'][['orderDate', 'storeName', 'daily_sales', 'daily_cost', 'daily_profit', 'transaction_count']].copy()
         display_daily['daily_sales'] = display_daily['daily_sales'].apply(lambda x: f"₹{x:,.2f}")
         display_daily['daily_cost'] = display_daily['daily_cost'].apply(lambda x: f"₹{x:,.2f}")
-        display_daily['profit'] = display_daily['profit'].apply(lambda x: f"₹{x:,.2f}")
-        display_daily['profit_margin'] = display_daily['profit_margin'].apply(lambda x: f"{x:.2f}%")
+        display_daily['daily_profit'] = display_daily['daily_profit'].apply(lambda x: f"₹{x:,.2f}")
         display_daily['transaction_count'] = display_daily['transaction_count'].apply(lambda x: int(x))
-        display_daily.columns = ['Date', 'Store', 'Daily Sales', 'Daily Cost', 'Transactions', 'Profit', 'Profit Margin %']
+        display_daily.columns = ['Date', 'Store', 'Daily Sales', 'Daily Cost', 'Daily Profit', 'Transactions']
         st.dataframe(display_daily, use_container_width=True, height=400)
     
     # Export option
@@ -556,7 +552,7 @@ with st.sidebar:
     st.markdown("""
     **Total Profit**: Total sales minus total cost for the selected period.
     
-    **Avg Profit Margin**: (Total Profit / Total Sales) × 100
+    **Avg Profit Margin %**: (Total Profit / Total Sales) × 100
     
     **Average Sales/Day**: Total sales divided by the number of days in the selected date range.
     
