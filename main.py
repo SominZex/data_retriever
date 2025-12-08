@@ -3,7 +3,7 @@ import streamlit as st
 import runpy
 from pathlib import Path
 
-st.set_page_config(page_title="Unified Dashboard (Choose App)", page_icon="🧩", layout="wide")
+st.set_page_config(page_title="New Shop Unified Dashboard", page_icon="🧩", layout="wide")
 
 # ---------------------------------------
 # LOGIN & ROLE SYSTEM
