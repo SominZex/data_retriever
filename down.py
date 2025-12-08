@@ -33,7 +33,7 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
     """Load filters based on current selections - cascading effect"""
     conn_pool = get_connection_pool()
     conn = conn_pool.getconn()
-    cur = None  # Initialize cursor variable
+    cur = None
     
     try:
         # Build WHERE clause based on current selections
@@ -55,17 +55,22 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
         
-        # Create cursor once at the beginning
+        # Determine table to use
+        table_name = "billing_data"  # default
         cur = conn.cursor()
-        
-        # Try materialized view first, fallback to main table
         try:
+            cur.execute('SELECT 1 FROM filter_lookup LIMIT 1')
             table_name = "filter_lookup"
-            cur.execute(f'SELECT 1 FROM {table_name} LIMIT 1')
         except:
             table_name = "billing_data"
+            # CRITICAL: After exception, cursor is in error state
+            # Must close and create new cursor
+            cur.close()
+            cur = conn.cursor()
         
+        # Now cur is guaranteed to be in a good state
         # Load each filter with current constraints
+        
         # Brands
         brand_query = f'''
             SELECT DISTINCT "brandName" 
@@ -117,14 +122,12 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         cur.execute(store_query, store_params)
         stores = [row[0] for row in cur.fetchall()]
         
-        # Return already-materialized lists
         return (brands, categories, subcategories, stores)
         
     except Exception as e:
         st.error(f"Filter loading error: {str(e)}")
         return [], [], [], []
     finally:
-        # Close cursor first, then return connection
         if cur is not None:
             try:
                 cur.close()
@@ -135,16 +138,15 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         except:
             pass
 
-# Load unavailable filters - optimized like cascading filters
+
 @st.cache_data(ttl=7200)
 def load_unavailable_filters(start_date, end_date, brand=None, category=None, subcategory=None, store=None):
-    """Load filters that are unavailable based on current selections - using filter_lookup for speed"""
+    """Load filters that are unavailable based on current selections"""
     conn_pool = get_connection_pool()
     conn = conn_pool.getconn()
+    cur = None
     
     try:
-        cur = conn.cursor()
-        
         # Build WHERE clause for available items
         where_conditions = ['"orderDate" BETWEEN %s AND %s']
         params = [start_date, end_date]
@@ -164,12 +166,17 @@ def load_unavailable_filters(start_date, end_date, brand=None, category=None, su
         
         where_clause = " AND ".join(where_conditions)
         
-        # Try materialized view first, fallback to main table
+        # Determine table to use
+        table_name = "billing_data"
+        cur = conn.cursor()
         try:
+            cur.execute('SELECT 1 FROM filter_lookup LIMIT 1')
             table_name = "filter_lookup"
-            cur.execute(f'SELECT 1 FROM {table_name} LIMIT 1')
         except:
             table_name = "billing_data"
+            # CRITICAL: After exception, must recreate cursor
+            cur.close()
+            cur = conn.cursor()
         
         # Get all distinct values from filter_lookup (fast)
         cur.execute(f'SELECT DISTINCT "brandName" FROM {table_name} WHERE "brandName" IS NOT NULL ORDER BY "brandName"')
@@ -184,7 +191,7 @@ def load_unavailable_filters(start_date, end_date, brand=None, category=None, su
         cur.execute(f'SELECT DISTINCT "storeName" FROM {table_name} WHERE "storeName" IS NOT NULL ORDER BY "storeName"')
         all_stores = set(row[0] for row in cur.fetchall())
         
-        # Get available values based on current filters (from billing_data for date filtering)
+        # Get available values based on current filters
         cur.execute(f'SELECT DISTINCT "brandName" FROM billing_data WHERE {where_clause} AND "brandName" IS NOT NULL', params)
         available_brands = set(row[0] for row in cur.fetchall())
         
@@ -203,15 +210,21 @@ def load_unavailable_filters(start_date, end_date, brand=None, category=None, su
         unavailable_subcategories = sorted(all_subcategories - available_subcategories)
         unavailable_stores = sorted(all_stores - available_stores)
         
-        cur.close()
-        
         return (unavailable_brands, unavailable_categories, unavailable_subcategories, unavailable_stores)
         
     except Exception as e:
         st.error(f"Error loading unavailable filters: {str(e)}")
         return [], [], [], []
     finally:
-        conn_pool.putconn(conn)
+        if cur is not None:
+            try:
+                cur.close()
+            except:
+                pass
+        try:
+            conn_pool.putconn(conn)
+        except:
+            pass
 
 # Initialize session state
 if 'brand' not in st.session_state:
