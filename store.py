@@ -81,7 +81,7 @@ def fetch_sales_data(start_date, end_date, store_name=None):
                 "orderDate",
                 "storeName",
                 SUM("totalProductPrice") as daily_sales,
-                COALESCE(SUM(CAST("costPrice" AS NUMERIC)), 0) as daily_cost,
+                COALESCE(SUM("costPrice"), 0) as daily_cost,
                 COUNT(*) as transaction_count
             FROM billing_data 
             WHERE {where_clause}
