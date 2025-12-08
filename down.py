@@ -26,11 +26,14 @@ def get_connection_pool():
 
 # Cascading filter loader with smart caching
 # Cascading filter loader with smart caching
+# Replace the load_cascading_filters function with this fixed version:
+
 @st.cache_data(ttl=7200)
 def load_cascading_filters(brand=None, category=None, subcategory=None, store=None):
     """Load filters based on current selections - cascading effect"""
     conn_pool = get_connection_pool()
     conn = conn_pool.getconn()
+    cur = None  # Initialize cursor variable
     
     try:
         # Build WHERE clause based on current selections
@@ -52,19 +55,15 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
         
+        # Create cursor once at the beginning
+        cur = conn.cursor()
+        
         # Try materialized view first, fallback to main table
-        # Create a temporary cursor just for checking table existence
-        cur_check = conn.cursor()
         try:
             table_name = "filter_lookup"
-            cur_check.execute(f'SELECT 1 FROM {table_name} LIMIT 1')
+            cur.execute(f'SELECT 1 FROM {table_name} LIMIT 1')
         except:
             table_name = "billing_data"
-        finally:
-            cur_check.close()  # Close the check cursor
-        
-        # NOW create the main cursor for all subsequent queries
-        cur = conn.cursor()
         
         # Load each filter with current constraints
         # Brands
@@ -125,10 +124,16 @@ def load_cascading_filters(brand=None, category=None, subcategory=None, store=No
         st.error(f"Filter loading error: {str(e)}")
         return [], [], [], []
     finally:
-        # Close cursor only once at the end
-        if 'cur' in locals():
-            cur.close()
-        conn_pool.putconn(conn)
+        # Close cursor first, then return connection
+        if cur is not None:
+            try:
+                cur.close()
+            except:
+                pass
+        try:
+            conn_pool.putconn(conn)
+        except:
+            pass
 
 # Load unavailable filters - optimized like cascading filters
 @st.cache_data(ttl=7200)
