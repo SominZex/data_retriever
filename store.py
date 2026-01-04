@@ -104,7 +104,7 @@ def fetch_sales_data(start_date, end_date, store_name=None):
                 "storeName",
                 SUM("totalProductPrice") as daily_sales,
                 SUM(COALESCE("costPrice", 0) * "quantity") as daily_cost,
-                SUM("totalProductPrice" - (COALESCE("costPrice", 0) * "quantity")) as daily_profit,
+                SUM("totalProductPrice") - (COALESCE("costPrice", 0) * "quantity") as daily_profit,
                 COUNT(*) as transaction_count
             FROM billing_data 
             WHERE {where_clause}
