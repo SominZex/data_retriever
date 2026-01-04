@@ -77,6 +77,7 @@ def load_stores():
                 pass
 
 # Fetch sales data
+# Fetch sales data
 def fetch_sales_data(start_date, end_date, store_name=None):
     """Fetch sales data for the given date range and optional store"""
     conn_pool = get_connection_pool()
@@ -97,14 +98,14 @@ def fetch_sales_data(start_date, end_date, store_name=None):
         where_clause = " AND ".join(where_conditions)
         
         # Query to get daily sales with CORRECT profit calculation
-        # Profit = totalProductPrice - (costPrice * quantity) calculated per row before aggregation
+        # Profit = SUM(totalProductPrice) - SUM(costPrice * quantity)
         query = f'''
             SELECT 
                 "orderDate",
                 "storeName",
                 SUM("totalProductPrice") as daily_sales,
                 SUM(COALESCE("costPrice", 0) * "quantity") as daily_cost,
-                SUM("totalProductPrice") - (COALESCE("costPrice", 0) * "quantity") as daily_profit,
+                SUM("totalProductPrice") - SUM(COALESCE("costPrice", 0) * "quantity") as daily_profit,
                 COUNT(*) as transaction_count
             FROM billing_data 
             WHERE {where_clause}
