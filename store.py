@@ -96,20 +96,21 @@ def fetch_sales_data(start_date, end_date, store_name=None):
         
         where_clause = " AND ".join(where_conditions)
         
-        # Query to get daily sales with store grouping and cost data
+        # Query to get daily sales with CORRECT profit calculation
+        # Profit = totalProductPrice - (costPrice * quantity) calculated per row before aggregation
         query = f'''
             SELECT 
                 "orderDate",
                 "storeName",
                 SUM("totalProductPrice") as daily_sales,
-                SUM("costPrice" * "quantity") as daily_cost,
-                SUM("totalProductPrice" - ("costPrice" * "quantity")) as daily_profit,
+                SUM(COALESCE("costPrice", 0) * "quantity") as daily_cost,
+                SUM("totalProductPrice" - (COALESCE("costPrice", 0) * "quantity")) as daily_profit,
                 COUNT(*) as transaction_count
             FROM billing_data 
             WHERE {where_clause}
             GROUP BY "orderDate", "storeName"
             ORDER BY "orderDate", "storeName"
-            '''
+        '''
         
         cur.execute(query, params)
         columns = [desc[0] for desc in cur.description]
@@ -154,13 +155,11 @@ def calculate_metrics(df, start_date, end_date):
     pdf = df.to_pandas()
     pdf['orderDate'] = pd.to_datetime(pdf['orderDate'])
     
-    # Handle null values in daily_cost (treat as 0)
+    # Handle null values (treat as 0)
     pdf['daily_cost'] = pdf['daily_cost'].fillna(0)
+    pdf['daily_profit'] = pdf['daily_profit'].fillna(0)
     
-    # Calculate profit
-    pdf['daily_profit'] = pdf['daily_sales'] - pdf['daily_cost']
-    
-    # Total sales and costs
+    # Total sales, costs, and profit (profit already calculated correctly in SQL)
     total_sales = pdf['daily_sales'].sum()
     total_cost = pdf['daily_cost'].sum()
     total_profit = pdf['daily_profit'].sum()
