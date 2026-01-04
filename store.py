@@ -76,7 +76,7 @@ def load_stores():
             except:
                 pass
 
-# Fetch sales data
+# Fetch sales data with EXACT same calculation as monthly_reports.py
 def fetch_sales_data(start_date, end_date, store_name=None):
     """Fetch sales data for the given date range and optional store"""
     conn_pool = get_connection_pool()
@@ -96,15 +96,15 @@ def fetch_sales_data(start_date, end_date, store_name=None):
         
         where_clause = " AND ".join(where_conditions)
         
-        # Query matching monthly_reports.py convention EXACTLY
-        # Profit calculation per row inside SUM, same as monthly_reports.py
+        # EXACT same calculation as monthly_reports.py
+        # This calculates profit the RIGHT way: aggregate THEN subtract
         query = f'''
             SELECT 
                 "orderDate",
                 "storeName",
-                SUM("totalProductPrice") as daily_sales,
-                SUM(COALESCE("costPrice", 0) * "quantity") as daily_cost,
-                SUM("totalProductPrice" - (COALESCE("costPrice", 0) * "quantity")) as daily_profit,
+                ROUND(SUM("totalProductPrice")::numeric, 2) as daily_sales,
+                ROUND(SUM(COALESCE("costPrice", 0) * "quantity")::numeric, 2) as daily_cost,
+                ROUND((SUM("totalProductPrice") - SUM(COALESCE("costPrice", 0) * "quantity"))::numeric, 2) as daily_profit,
                 COUNT(*) as transaction_count
             FROM billing_data 
             WHERE {where_clause}
@@ -127,7 +127,6 @@ def fetch_sales_data(start_date, end_date, store_name=None):
         
     except (psycopg2.OperationalError, psycopg2.InterfaceError) as e:
         st.error(f"Database connection error: {str(e)}")
-        # Mark connection as bad
         if conn:
             try:
                 conn_pool.putconn(conn, close=True)
@@ -145,41 +144,39 @@ def fetch_sales_data(start_date, end_date, store_name=None):
             except:
                 pass
 
-
-# Calculate metrics
+# Calculate metrics - SIMPLIFIED, no recalculation
 def calculate_metrics(df, start_date, end_date):
     """Calculate all sales metrics from the dataframe"""
     if df is None or len(df) == 0:
         return None
     
-    # Convert to pandas for easier calculations
+    # Convert to pandas
     pdf = df.to_pandas()
     pdf['orderDate'] = pd.to_datetime(pdf['orderDate'])
     
-    # Handle null values (treat as 0)
+    # Fill nulls with 0
     pdf['daily_cost'] = pdf['daily_cost'].fillna(0)
     pdf['daily_profit'] = pdf['daily_profit'].fillna(0)
+    pdf['daily_sales'] = pdf['daily_sales'].fillna(0)
     
-    # CRITICAL FIX: Just sum the daily_profit from SQL directly
-    # DO NOT recalculate - profit is already correctly calculated in the SQL query
-    total_sales = pdf['daily_sales'].sum()
-    total_cost = pdf['daily_cost'].sum()
-    total_profit = pdf['daily_profit'].sum()  # This is already correct from SQL
+    # CRITICAL: Just sum what SQL already calculated correctly
+    total_sales = float(pdf['daily_sales'].sum())
+    total_cost = float(pdf['daily_cost'].sum())
+    total_profit = float(pdf['daily_profit'].sum())
     
-    # Calculate profit margin percentage
-    avg_profit_margin = (total_profit / total_sales * 100) if total_sales > 0 else 0
+    # Profit margin - EXACT same formula as monthly_reports.py
+    if total_sales > 0:
+        avg_profit_margin = (total_profit / total_sales) * 100
+    else:
+        avg_profit_margin = 0.0
     
     # Date range calculations
-    date_range = (end_date - start_date).days + 1  # +1 to include both start and end dates
-    
-    # Average sales per day (total sales / number of days in range)
+    date_range = (end_date - start_date).days + 1
     avg_sales_per_day = total_sales / date_range if date_range > 0 else 0
     
     # Weekly calculations
-    # Group by week
     pdf['week'] = pdf['orderDate'].dt.to_period('W')
     weekly_sales = pdf.groupby('week')['daily_sales'].sum()
-    
     total_weeks = len(weekly_sales)
     weekly_total_sales = weekly_sales.sum()
     weekly_avg_sales = weekly_sales.mean() if total_weeks > 0 else 0
@@ -187,23 +184,28 @@ def calculate_metrics(df, start_date, end_date):
     # Monthly calculations
     pdf['month'] = pdf['orderDate'].dt.to_period('M')
     monthly_sales = pdf.groupby('month')['daily_sales'].sum()
-    
     total_months = len(monthly_sales)
     monthly_avg_sales = monthly_sales.mean() if total_months > 0 else 0
     
     # Total transactions
-    total_transactions = pdf['transaction_count'].sum()
+    total_transactions = int(pdf['transaction_count'].sum())
     
-    # Store-wise breakdown
-    # CRITICAL FIX: Use daily_profit from SQL, don't recalculate
+    # Store-wise breakdown - just aggregate what SQL calculated
     store_breakdown = pdf.groupby('storeName').agg({
         'daily_sales': 'sum',
         'daily_cost': 'sum',
-        'daily_profit': 'sum',  # Already correct from SQL
+        'daily_profit': 'sum',
         'transaction_count': 'sum'
     }).reset_index()
+    
     store_breakdown.columns = ['storeName', 'total_sales', 'total_cost', 'total_profit', 'total_transactions']
-    store_breakdown['profit_margin'] = (store_breakdown['total_profit'] / store_breakdown['total_sales'] * 100).fillna(0)
+    
+    # Calculate profit margin per store - EXACT same way as monthly_reports.py
+    store_breakdown['profit_margin'] = store_breakdown.apply(
+        lambda row: (row['total_profit'] / row['total_sales'] * 100) if row['total_sales'] > 0 else 0,
+        axis=1
+    )
+    
     store_breakdown = store_breakdown.sort_values('total_sales', ascending=False)
     
     return {
@@ -247,7 +249,6 @@ try:
         )
     
     with col3:
-        # Load stores
         with st.spinner("Loading stores..."):
             stores = load_stores()
         
@@ -258,10 +259,8 @@ try:
             index=0
         )
     
-    # Convert store selection
     store_filter = None if selected_store == "-- All Stores --" else selected_store
     
-    # Validate dates
     if start_date > end_date:
         st.error("⚠️ Start date must be before or equal to end date!")
         st.stop()
@@ -276,7 +275,6 @@ try:
         st.warning("⚠️ No data found for the selected filters")
         st.stop()
     
-    # Calculate metrics
     metrics = calculate_metrics(df, start_date, end_date)
     
     if metrics is None:
@@ -358,11 +356,10 @@ try:
     
     st.divider()
     
-    # Store-wise Breakdown (if all stores selected)
+    # Store-wise Breakdown
     if store_filter is None and len(metrics['store_breakdown']) > 1:
         st.subheader("🏪 Store-wise Sales Breakdown")
         
-        # Top stores chart
         fig_stores = px.bar(
             metrics['store_breakdown'].head(10),
             x='storeName',
@@ -375,7 +372,6 @@ try:
         fig_stores.update_layout(height=400, showlegend=False)
         st.plotly_chart(fig_stores, use_container_width=True)
         
-        # Store breakdown table
         with st.expander("📋 View All Stores"):
             display_df = metrics['store_breakdown'].copy()
             display_df['total_sales'] = display_df['total_sales'].apply(lambda x: f"₹{x:,.2f}")
@@ -391,7 +387,6 @@ try:
     # Daily Sales Trend
     st.subheader("📅 Daily Sales Trend")
     
-    # Prepare data for daily chart
     daily_chart_data = metrics['daily_data'].groupby('orderDate')['daily_sales'].sum().reset_index()
     
     fig_daily = go.Figure()
@@ -405,7 +400,6 @@ try:
         marker=dict(size=6)
     ))
     
-    # Add average line
     fig_daily.add_hline(
         y=metrics['avg_sales_per_day'],
         line_dash="dash",
@@ -445,7 +439,6 @@ try:
             help=f"Average across {metrics['total_weeks']} week(s)"
         )
     
-    # Weekly chart
     weekly_chart_data = pd.DataFrame({
         'Week': [str(w) for w in metrics['weekly_data'].index],
         'Sales': metrics['weekly_data'].values
@@ -475,7 +468,6 @@ try:
             help=f"Average across {metrics['total_months']} month(s)"
         )
         
-        # Monthly chart
         monthly_chart_data = pd.DataFrame({
             'Month': [str(m) for m in metrics['monthly_data'].index],
             'Sales': metrics['monthly_data'].values
@@ -508,8 +500,7 @@ try:
     # Export option
     st.divider()
     
-    if st.button("📥 Export Summary Report", type="primary"):
-        # Create summary report
+    if st.button("💾 Export Summary Report", type="primary"):
         summary_data = {
             'Metric': [
                 'Date Range',
@@ -580,7 +571,7 @@ with st.sidebar:
     
     st.header("📊 Metrics Explained")
     st.markdown("""
-    **Total Profit**: Total sales minus total cost for the selected period.
+    **Total Profit**: Calculated as Total Sales - Total Cost (aggregated then subtracted).
     
     **Avg Profit Margin %**: (Total Profit / Total Sales) × 100
     
