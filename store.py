@@ -103,12 +103,13 @@ def fetch_sales_data(start_date, end_date, store_name=None):
                 "storeName",
                 SUM("totalProductPrice") as daily_sales,
                 SUM("costPrice" * "quantity") as daily_cost,
+                SUM("totalProductPrice" - ("costPrice" * "quantity")) as daily_profit,
                 COUNT(*) as transaction_count
             FROM billing_data 
             WHERE {where_clause}
             GROUP BY "orderDate", "storeName"
             ORDER BY "orderDate", "storeName"
-        '''
+            '''
         
         cur.execute(query, params)
         columns = [desc[0] for desc in cur.description]
