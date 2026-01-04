@@ -96,9 +96,8 @@ def fetch_sales_data(start_date, end_date, store_name=None):
         
         where_clause = " AND ".join(where_conditions)
         
-        # Query matching monthly_reports.py convention
-        # Calculate profit per row: (totalProductPrice - (costPrice * quantity))
-        # Then aggregate with SUM
+        # Query matching monthly_reports.py convention EXACTLY
+        # Profit calculation per row inside SUM, same as monthly_reports.py
         query = f'''
             SELECT 
                 "orderDate",
@@ -146,6 +145,7 @@ def fetch_sales_data(start_date, end_date, store_name=None):
             except:
                 pass
 
+
 # Calculate metrics
 def calculate_metrics(df, start_date, end_date):
     """Calculate all sales metrics from the dataframe"""
@@ -160,10 +160,11 @@ def calculate_metrics(df, start_date, end_date):
     pdf['daily_cost'] = pdf['daily_cost'].fillna(0)
     pdf['daily_profit'] = pdf['daily_profit'].fillna(0)
     
-    # Total sales, costs, and profit (profit already calculated correctly in SQL)
+    # CRITICAL FIX: Just sum the daily_profit from SQL directly
+    # DO NOT recalculate - profit is already correctly calculated in the SQL query
     total_sales = pdf['daily_sales'].sum()
     total_cost = pdf['daily_cost'].sum()
-    total_profit = pdf['daily_profit'].sum()
+    total_profit = pdf['daily_profit'].sum()  # This is already correct from SQL
     
     # Calculate profit margin percentage
     avg_profit_margin = (total_profit / total_sales * 100) if total_sales > 0 else 0
@@ -193,11 +194,12 @@ def calculate_metrics(df, start_date, end_date):
     # Total transactions
     total_transactions = pdf['transaction_count'].sum()
     
-    # Store-wise breakdown (if multiple stores)
+    # Store-wise breakdown
+    # CRITICAL FIX: Use daily_profit from SQL, don't recalculate
     store_breakdown = pdf.groupby('storeName').agg({
         'daily_sales': 'sum',
         'daily_cost': 'sum',
-        'daily_profit': 'sum',
+        'daily_profit': 'sum',  # Already correct from SQL
         'transaction_count': 'sum'
     }).reset_index()
     store_breakdown.columns = ['storeName', 'total_sales', 'total_cost', 'total_profit', 'total_transactions']
