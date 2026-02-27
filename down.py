@@ -24,21 +24,7 @@ def get_connection_pool():
         connect_timeout=10
     )
 
-def _get_table_name(cur):
-    """
-    Safely check if filter_lookup exists using a SAVEPOINT so that
-    a failure does NOT abort the surrounding transaction.
-    """
-    try:
-        cur.execute("SAVEPOINT check_filter_lookup")
-        cur.execute("SELECT 1 FROM filter_lookup LIMIT 1")
-        cur.execute("RELEASE SAVEPOINT check_filter_lookup")
-        return "filter_lookup"
-    except Exception:
-        cur.execute("ROLLBACK TO SAVEPOINT check_filter_lookup")
-        return "billing_data"
-
-
+# Cascading filter loader with smart caching
 @st.cache_data(ttl=7200, show_spinner=False)
 def _fetch_cascading_filters_from_db(brand, category, subcategory, store):
     """Internal function that does the actual DB work - this gets cached"""
@@ -48,11 +34,7 @@ def _fetch_cascading_filters_from_db(brand, category, subcategory, store):
     
     try:
         conn = conn_pool.getconn()
-        cur = conn.cursor()
-
-        # Determine table to use (safe, won't abort transaction)
-        table_name = _get_table_name(cur)
-
+        
         # Build WHERE clause based on current selections
         where_conditions = []
         params = []
@@ -71,52 +53,73 @@ def _fetch_cascading_filters_from_db(brand, category, subcategory, store):
             params.append(store)
         
         where_clause = " AND ".join(where_conditions) if where_conditions else "1=1"
-
-        # Helper: build params excluding the filter for the current column
-        # so that column's dropdown always shows all options compatible with OTHER filters
-        def make_params_excluding(excluded_value):
-            return [p for p in params if p != excluded_value]
-
-        def make_where_excluding(col):
-            conds = [c for c in where_conditions if col not in c]
-            return " AND ".join(conds) if conds else "1=1"
+        
+        # Determine table to use.
+        # IMPORTANT: Use a SAVEPOINT so that if filter_lookup doesn't exist,
+        # only that sub-operation is rolled back — the transaction stays alive
+        # and the subsequent queries don't get "current transaction is aborted".
+        cur = conn.cursor()
+        try:
+            cur.execute("SAVEPOINT sp_check_filter_lookup")
+            cur.execute('SELECT 1 FROM filter_lookup LIMIT 1')
+            cur.execute("RELEASE SAVEPOINT sp_check_filter_lookup")
+            table_name = "filter_lookup"
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT sp_check_filter_lookup")
+            table_name = "billing_data"
 
         # Brands
-        cur.execute(
-            f'SELECT DISTINCT "brandName" FROM {table_name} '
-            f'WHERE "brandName" IS NOT NULL AND {make_where_excluding("brandName")} '
-            f'ORDER BY "brandName"',
-            make_params_excluding(brand)
-        )
+        brand_query = f'''
+            SELECT DISTINCT "brandName" 
+            FROM {table_name} 
+            WHERE "brandName" IS NOT NULL 
+            {f"AND {where_clause.replace(chr(34) + 'brandName' + chr(34) + ' = %s', '1=1')}" if brand else f"AND {where_clause}"}
+            ORDER BY "brandName" 
+        '''
+        brand_params = [p for i, p in enumerate(params) if not (brand and i == 0)]
+        cur.execute(brand_query, brand_params)
         brands = [row[0] for row in cur.fetchall()]
         
         # Categories
-        cur.execute(
-            f'SELECT DISTINCT "categoryName" FROM {table_name} '
-            f'WHERE "categoryName" IS NOT NULL AND {make_where_excluding("categoryName")} '
-            f'ORDER BY "categoryName" LIMIT 1000',
-            make_params_excluding(category)
-        )
+        cat_query = f'''
+            SELECT DISTINCT "categoryName" 
+            FROM {table_name} 
+            WHERE "categoryName" IS NOT NULL 
+            {f"AND {where_clause.replace(chr(34) + 'categoryName' + chr(34) + ' = %s', '1=1')}" if category else f"AND {where_clause}"}
+            ORDER BY "categoryName" 
+            LIMIT 1000
+        '''
+        cat_params = [p for i, p in enumerate(params) if not (category and params[i] == category)]
+        cur.execute(cat_query, cat_params)
         categories = [row[0] for row in cur.fetchall()]
         
         # Subcategories
-        cur.execute(
-            f'SELECT DISTINCT "subCategoryOf" FROM {table_name} '
-            f'WHERE "subCategoryOf" IS NOT NULL AND {make_where_excluding("subCategoryOf")} '
-            f'ORDER BY "subCategoryOf" LIMIT 1000',
-            make_params_excluding(subcategory)
-        )
+        subcat_query = f'''
+            SELECT DISTINCT "subCategoryOf" 
+            FROM {table_name} 
+            WHERE "subCategoryOf" IS NOT NULL 
+            {f"AND {where_clause.replace(chr(34) + 'subCategoryOf' + chr(34) + ' = %s', '1=1')}" if subcategory else f"AND {where_clause}"}
+            ORDER BY "subCategoryOf" 
+            LIMIT 1000
+        '''
+        subcat_params = [p for i, p in enumerate(params) if not (subcategory and params[i] == subcategory)]
+        cur.execute(subcat_query, subcat_params)
         subcategories = [row[0] for row in cur.fetchall()]
         
         # Stores
-        cur.execute(
-            f'SELECT DISTINCT "storeName" FROM {table_name} '
-            f'WHERE "storeName" IS NOT NULL AND {make_where_excluding("storeName")} '
-            f'ORDER BY "storeName" LIMIT 1000',
-            make_params_excluding(store)
-        )
+        store_query = f'''
+            SELECT DISTINCT "storeName" 
+            FROM {table_name} 
+            WHERE "storeName" IS NOT NULL 
+            {f"AND {where_clause.replace(chr(34) + 'storeName' + chr(34) + ' = %s', '1=1')}" if store else f"AND {where_clause}"}
+            ORDER BY "storeName" 
+            LIMIT 1000
+        '''
+        store_params = [p for i, p in enumerate(params) if not (store and params[i] == store)]
+        cur.execute(store_query, store_params)
         stores = [row[0] for row in cur.fetchall()]
         
+        # Return pure data (no connection objects)
         return (brands, categories, subcategories, stores)
         
     finally:
@@ -150,11 +153,7 @@ def _fetch_unavailable_filters_from_db(start_date, end_date, brand, category, su
     
     try:
         conn = conn_pool.getconn()
-        cur = conn.cursor()
-
-        # Determine table to use (safe, won't abort transaction)
-        table_name = _get_table_name(cur)
-
+        
         # Build WHERE clause
         where_conditions = ['"orderDate" BETWEEN %s AND %s']
         params = [start_date, end_date]
@@ -173,6 +172,18 @@ def _fetch_unavailable_filters_from_db(start_date, end_date, brand, category, su
             params.append(store)
         
         where_clause = " AND ".join(where_conditions)
+        
+        # Determine table — use SAVEPOINT so a missing filter_lookup
+        # does NOT abort the whole transaction
+        cur = conn.cursor()
+        try:
+            cur.execute("SAVEPOINT sp_check_filter_lookup")
+            cur.execute('SELECT 1 FROM filter_lookup LIMIT 1')
+            cur.execute("RELEASE SAVEPOINT sp_check_filter_lookup")
+            table_name = "filter_lookup"
+        except Exception:
+            cur.execute("ROLLBACK TO SAVEPOINT sp_check_filter_lookup")
+            table_name = "billing_data"
         
         # Get all distinct values
         cur.execute(f'SELECT DISTINCT "brandName" FROM {table_name} WHERE "brandName" IS NOT NULL ORDER BY "brandName"')
@@ -206,6 +217,7 @@ def _fetch_unavailable_filters_from_db(start_date, end_date, brand, category, su
         unavailable_subcategories = sorted(all_subcategories - available_subcategories)
         unavailable_stores = sorted(all_stores - available_stores)
         
+        # Return pure data (no connection objects)
         return (unavailable_brands, unavailable_categories, unavailable_subcategories, unavailable_stores)
         
     finally:
